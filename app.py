@@ -66,6 +66,7 @@ with aba_equipe:
                 st.write("---")
 
 # --- ABA DE GESTÃO ---
+# --- ABA DE GESTÃO ---
 with aba_gestao:
     st.header("Análise de Desempenho e Pendências")
     
@@ -74,7 +75,6 @@ with aba_gestao:
     hoje = datetime.date.today()
     inicio_mes = hoje.replace(day=1)
     
-    # Calendário forçado para o padrão brasileiro
     datas = col_filtro1.date_input("Período analisado:", [inicio_mes, hoje], format="DD/MM/YYYY")
     
     if len(datas) == 2:
@@ -83,7 +83,7 @@ with aba_gestao:
         data_inicio = datas[0]
         data_fim = datas[0]
 
-    # Lógica para expandir a data escolhida para a semana completa (Domingo a Sábado)
+    # Ajusta para abranger do Domingo ao Sábado das semanas selecionadas
     dias_do_domingo_inicio = (data_inicio.weekday() + 1) % 7
     data_inicio_semana = data_inicio - datetime.timedelta(days=dias_do_domingo_inicio)
     
@@ -101,51 +101,74 @@ with aba_gestao:
         
     dados = query.execute()
 
-    # Informa o utilizador da semana exata que está a ser analisada
-    st.write(f"**A exibir relatório da semana:** {data_inicio_semana.strftime('%d/%m/%Y')} a {data_fim_semana.strftime('%d/%m/%Y')}")
+    st.caption(f"Período ajustado para semanas completas: {data_inicio_semana.strftime('%d/%m/%Y')} a {data_fim_semana.strftime('%d/%m/%Y')}")
 
     if not dados.data:
-        st.info("Nenhum serviço registado para estas semanas.")
+        st.info("Nenhum serviço registrado para este período.")
     else:
         df = pd.DataFrame(dados.data)
         
+        # 1. Identificar a qual semana exata cada faxina pertence
+        df['data_obj'] = pd.to_datetime(df['data'])
+        
+        def rotulo_semana(d):
+            idx_domingo = (d.weekday() + 1) % 7
+            inicio = d - datetime.timedelta(days=idx_domingo)
+            fim = inicio + datetime.timedelta(days=6)
+            return f"{inicio.strftime('%d/%m')} a {fim.strftime('%d/%m')}"
+            
+        df['Semana'] = df['data_obj'].apply(rotulo_semana)
+        
         st.divider()
         
-        st.subheader("Concluídos vs Pendentes vs Não Realizados")
-        contagem = df['status'].value_counts()
-        st.bar_chart(contagem)
+        # 2. Tabela Resumo: O que foi feito e não feito por semana
+        st.subheader("Resumo Semanal da Equipe")
+        
+        resumo = pd.crosstab(
+            index=[df['Semana'], df['funcionario']], 
+            columns=df['status']
+        ).reset_index()
+        
+        # Garante que as colunas existam mesmo se ninguém marcou aquele status
+        for status in ['Concluído', 'Não Realizada', 'Pendente']:
+            if status not in resumo.columns:
+                resumo[status] = 0
+                
+        # Organiza e renomeia as colunas para o relatório
+        resumo = resumo[['Semana', 'funcionario', 'Concluído', 'Não Realizada', 'Pendente']]
+        resumo.columns = ['Semana', 'Membro da Equipe', 'Feitas (✅)', 'Não Feitas (❌)', 'Pendentes (⏳)']
+        
+        st.dataframe(resumo, hide_index=True, use_container_width=True)
         
         st.divider()
         
-        st.subheader("Relatório Semanal de Serviços")
+        # 3. Lista detalhada de serviços 
+        st.subheader("Lista Detalhada de Serviços")
+        df['data_formatada'] = df['data_obj'].dt.strftime('%d/%m/%Y')
         
-        # Converte a coluna 'data' para o padrão BR na hora de mostrar na tabela
-        df['data'] = pd.to_datetime(df['data']).dt.strftime('%d/%m/%Y')
+        df_exibicao = df[['Semana', 'data_formatada', 'funcionario', 'descricao', 'status']].copy()
         
-        # Exibe a tabela com as tarefas (Feitas, Não Realizadas e Pendentes)
         st.dataframe(
-            df, 
+            df_exibicao, 
             column_config={
-                "id": None,
+                "Semana": "Semana",
+                "data_formatada": "Data Exata",
                 "funcionario": "Responsável",
                 "descricao": "Serviço",
-                "data": "Data",
-                "status": "Status",
-                "motivo": None  # Escondemos da tabela para ficar mais limpa
+                "status": "Status"
             },
             hide_index=True,
             use_container_width=True
         )
         
-        # Secção para expandir os motivos clicando nas tarefas não realizadas
-        # Usar .get para evitar erros caso a tabela original ainda não tenha a coluna 'motivo' criada
+        # 4. Ler motivos das não realizadas
         if 'status' in df.columns:
             df_nao_realizadas = df[df['status'] == 'Não Realizada']
             
             if not df_nao_realizadas.empty:
-                st.markdown("### Detalhes das Tarefas Não Realizadas")
+                st.markdown("### Motivos das Faxinas Não Realizadas")
                 st.caption("Clique no item abaixo para ver o motivo da faxina não ter sido feita.")
                 for _, linha in df_nao_realizadas.iterrows():
-                    with st.expander(f"{linha['data']} - {linha['funcionario']} - {linha['descricao']}"):
-                        motivo_texto = linha.get('motivo', 'Motivo não registado.') 
+                    with st.expander(f"{linha['Semana']} | {linha['data_formatada']} - {linha['funcionario']} - {linha['descricao']}"):
+                        motivo_texto = linha.get('motivo', 'Motivo não registrado.') 
                         st.write(f"**Motivo:** {motivo_texto}")
